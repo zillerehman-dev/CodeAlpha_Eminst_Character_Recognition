@@ -1,0 +1,33 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Raw EMNIST dataset files (large — download separately, see data/README.md)
+data/*.gz
+data/*.ubyte
+data/*-idx3-ubyte
+data/*-idx1-ubyte
+
+# Logs / temp
+*.log
+*.tmp
+.DS_Store
+
+# Colab
+.colab/
+
+# Streamlit
+.streamlit/
+
+# OS
+Thumbs.db
