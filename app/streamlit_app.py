@@ -1,9 +1,5 @@
 """
 Streamlit inference app for the EMNIST-Letters handwritten character recognizer.
-
-IMPORTANT: this app performs INFERENCE ONLY. The model is trained offline
-(in the companion notebook / Google Colab) and loaded here from disk.
-Preprocessing here must match `utils/preprocessing.py` exactly.
 """
 import json
 import sys
@@ -24,9 +20,14 @@ st.set_page_config(page_title="Handwritten Character Recognition", page_icon="âœ
 
 @st.cache_resource
 def load_model_and_labels():
-    """Load the trained model and label mapping once per server process."""
-    import tensorflow as tf
-
+    """
+    Load the trained model and label mapping once per server process.
+    Returns (model, label_map, tf_version) on success.
+    Raises FileNotFoundError for missing files, or RuntimeError with the
+    real underlying error message for anything else (version mismatch,
+    corrupted file, etc.) so the UI can show something actionable instead
+    of a generic "could not be loaded".
+    """
     if not MODEL_PATH.exists():
         raise FileNotFoundError(
             f"Model file not found at {MODEL_PATH}. Train the model in the notebook first "
@@ -37,11 +38,27 @@ def load_model_and_labels():
             f"Label mapping not found at {LABELS_PATH}. Copy label_mapping.json into model/."
         )
 
-    model = tf.keras.models.load_model(MODEL_PATH)
-    with open(LABELS_PATH, "r") as f:
-        raw_map = json.load(f)
-    label_map = {int(k): v for k, v in raw_map.items()}
-    return model, label_map
+    import tensorflow as tf
+
+    try:
+        model = tf.keras.models.load_model(MODEL_PATH)
+    except Exception as e:
+        raise RuntimeError(
+            "Failed to load the .keras model file. This file was saved with Keras 3 "
+            "(native .keras format). If you're on TensorFlow < 2.16, its bundled tf.keras "
+            "cannot read this format â€” run `pip install --upgrade tensorflow` (or "
+            "`pip install \"tensorflow>=2.16\"`) and restart the app.\n\n"
+            f"Original error: {type(e).__name__}: {e}"
+        ) from e
+
+    try:
+        with open(LABELS_PATH, "r") as f:
+            raw_map = json.load(f)
+        label_map = {int(k): v for k, v in raw_map.items()}
+    except Exception as e:
+        raise RuntimeError(f"Failed to parse label_mapping.json: {type(e).__name__}: {e}") from e
+
+    return model, label_map, tf.__version__
 
 
 def to_emnist_style_28x28(pil_image: Image.Image) -> np.ndarray:
@@ -57,14 +74,9 @@ def to_emnist_style_28x28(pil_image: Image.Image) -> np.ndarray:
     blindly inverting every image.
     """
     img = pil_image.convert("L")  # grayscale
-
-    # Resize to 28x28 (EMNIST's native resolution) with high-quality resampling
     img = img.resize((28, 28), Image.LANCZOS)
     arr = np.array(img).astype("float32")
 
-    # EMNIST convention: background ~0 (black), strokes ~255 (white).
-    # If the uploaded image looks like typical paper (bright background,
-    # dark ink), the mean pixel value will be high -> invert it.
     if arr.mean() > 127:
         arr = 255.0 - arr
 
@@ -79,13 +91,24 @@ def main():
     )
 
     try:
-        model, label_map = load_model_and_labels()
+        model, label_map, tf_version = load_model_and_labels()
     except FileNotFoundError as e:
         st.error(str(e))
         st.stop()
-    except Exception:
-        st.error("The model could not be loaded. Please check that the model file is valid.")
+    except RuntimeError as e:
+        st.error("The model could not be loaded.")
+        with st.expander("Show details"):
+            st.code(str(e))
         st.stop()
+    except Exception as e:
+        st.error("The model could not be loaded due to an unexpected error.")
+        with st.expander("Show details"):
+            st.code(f"{type(e).__name__}: {e}")
+        st.stop()
+
+    with st.sidebar:
+        st.caption(f"Model input shape: {model.input_shape}")
+        st.caption(f"Classes: {len(label_map)}")
 
     uploaded = st.file_uploader("Upload an image (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg"])
 
@@ -120,8 +143,10 @@ def main():
 
     try:
         probs = model.predict(batch, verbose=0)[0]
-    except Exception:
-        st.error("Model inference failed unexpectedly. Please try a different image.")
+    except Exception as e:
+        st.error("Model inference failed unexpectedly.")
+        with st.expander("Show details"):
+            st.code(f"{type(e).__name__}: {e}")
         return
 
     top_idx = np.argsort(probs)[::-1][:3]
